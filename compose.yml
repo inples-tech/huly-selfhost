@@ -452,7 +452,7 @@ services:
 
   # Расшифровка созвонов: пишет аудиодорожки участников через LiveKit Egress,
   # отправляет в Gemini и возвращает итог в Huly. Репозиторий сервиса —
-  # Inples-LTS/huly-meetscribe, образ собирается в GitHub Actions и приезжает
+  # inples-tech/huly-meetscribe, образ собирается в GitHub Actions и приезжает
   # из GHCR: на этом хосте рядом живёт боевой Huly, собирать здесь нельзя.
   meetscribe:
     image: ghcr.io/inples-lts/huly-meetscribe:latest
