@@ -72,6 +72,19 @@ notify() {
     --data-urlencode "parse_mode=HTML" || true
 }
 
+# Все рекурсивные удаления в этом скрипте идут через одну дверь. Ключ к бакету —
+# общий с ночными дампами Postgres edlegal и RAG-репликой, и права на удаление у него
+# на весь бакет. Ошибка в переменной пути увезла бы "s3 rm --recursive" в чужие данные,
+# поэтому цель проверяется по шаблону: свой бакет, свой префикс, каталог-дата на конце.
+s3_rm_guarded() {
+  local uri="$1"
+  if ! [[ "$uri" =~ ^s3://${S3_BUCKET}/${S3_PREFIX}/(daily|weekly|monthly)/[0-9]{4}-[0-9]{2}-[0-9]{2}/?$ ]]; then
+    FAILED_STEP="ПРЕДОХРАНИТЕЛЬ: удаление '$uri' не похоже на каталог-дату бэкапа Huly, отказано"
+    return 1
+  fi
+  "$AWS" --endpoint-url "$S3_ENDPOINT" s3 rm "$uri" --recursive --only-show-errors
+}
+
 FAILED_STEP="запуск"
 on_error() {
   local code=$?
@@ -113,7 +126,20 @@ log "CockroachDB: $((CR_SIZE / 1024 / 1024)) МБ"
 # ── 2. MinIO ─────────────────────────────────────────────────────────────
 FAILED_STEP="упаковка тома MinIO"
 log "MinIO: упаковываем $MINIO_DATA"
-tar czf "$OUT/minio-$TS.tar.gz" -C "$MINIO_DATA" .
+# MinIO пишет в тома во время упаковки, и tar на этом возвращает 1
+# ("file changed as we read it") — архив при этом целый, меняются отдельные блобы.
+# Код 2 и выше — настоящая ошибка. Целостность страхует проверка размера ниже.
+set +e
+tar czf "$OUT/minio-$TS.tar.gz" -C "$MINIO_DATA" . 2>>"$LOG"
+TAR_RC=$?
+set -e
+if [ "$TAR_RC" -ge 2 ]; then
+  FAILED_STEP="tar на томе MinIO вернул $TAR_RC — это не предупреждение, а ошибка"
+  false
+fi
+if [ "$TAR_RC" -eq 1 ]; then
+  log "MinIO: файлы менялись во время упаковки (tar=1) — для блобов это ожидаемо"
+fi
 MINIO_SIZE=$(stat -c %s "$OUT/minio-$TS.tar.gz")
 log "MinIO: $((MINIO_SIZE / 1024 / 1024)) МБ"
 [ "$MINIO_SIZE" -ge "$MIN_MINIO_BYTES" ] || { FAILED_STEP="архив MinIO подозрительно мал ($MINIO_SIZE байт)"; false; }
@@ -183,7 +209,7 @@ DEST="s3://$S3_BUCKET/$S3_PREFIX/daily/$DATE"
 log "S3: выгружаем в $DEST"
 # Каталог даты должен содержать ровно один прогон: повторный запуск (ретрай после
 # сбоя) иначе накапливает архивы, а ротация удаляет каталоги целиком и их не видит.
-"$AWS" --endpoint-url "$S3_ENDPOINT" s3 rm "$DEST" --recursive --only-show-errors || true
+s3_rm_guarded "$DEST" || true
 for f in "$OUT"/*; do
   "$AWS" --endpoint-url "$S3_ENDPOINT" s3 cp "$f" "$DEST/$(basename "$f")" --only-show-errors
 done
@@ -191,8 +217,7 @@ done
 copy_to() {
   local tier="$1"
   log "S3: копия в $tier/$DATE"
-  "$AWS" --endpoint-url "$S3_ENDPOINT" s3 rm "s3://$S3_BUCKET/$S3_PREFIX/$tier/$DATE" \
-    --recursive --only-show-errors || true
+  s3_rm_guarded "s3://$S3_BUCKET/$S3_PREFIX/$tier/$DATE" || true
   "$AWS" --endpoint-url "$S3_ENDPOINT" s3 cp "$DEST" \
     "s3://$S3_BUCKET/$S3_PREFIX/$tier/$DATE" --recursive --only-show-errors
 }
@@ -213,7 +238,7 @@ prune() {
   echo "$dirs" | head -n $((total - keep)) | while read -r d; do
     [ -z "$d" ] && continue
     log "  удаляем $tier/$d"
-    "$AWS" --endpoint-url "$S3_ENDPOINT" s3 rm "s3://$S3_BUCKET/$S3_PREFIX/$tier/$d" --recursive --only-show-errors
+    s3_rm_guarded "s3://$S3_BUCKET/$S3_PREFIX/$tier/$d"
   done
 }
 prune daily 7
