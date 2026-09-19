@@ -10,6 +10,10 @@
 #   3. По воскресеньям — логический бэкап каждого воркспейса штатным tool backup.
 #      Он переносим: разворачивается в другую инсталляцию Huly и служит страховкой
 #      на случай, если формат кластерного бэкапа окажется нечитаемым (HLY-25).
+#   4. Конфигурация развёртывания под age: env компоуза Dokploy и /etc/huly-secrets.
+#      Данные без неё мертвы — SECRET подписывает все токены, а приватный ключ
+#      GitHub App из репозитория не воспроизводится. Шифрование асимметричное:
+#      на хосте лежит только публичный ключ, расшифровать бэкап сервер не может.
 #
 # Куда: s3://<bucket>/huly-backup/{daily,weekly,monthly}/<дата>/
 # Ротация: 7 ежедневных, 4 еженедельных, 3 ежемесячных.
@@ -30,6 +34,12 @@ S3_PREFIX="huly-backup"
 AWS="$WORK/venv/bin/aws"
 
 WORKSPACES=(inpleslts bnlegal danilaq)
+
+# Конфигурация развёртывания: без неё восстановленные данные не запустить.
+# SECRET из huly_v7.conf подписывает все токены — без него в бэкап войти нельзя.
+RECIPIENTS="$WORK/recipients.txt"
+COMPOSE_CODE="/etc/dokploy/compose/${STACK}/code"
+ENV_PATHS=("$COMPOSE_CODE/huly_v7.conf" /etc/huly-secrets)
 
 # Нижние границы размера: если архив меньше, бэкап считается провалившимся.
 MIN_CR_BYTES=$((5 * 1024 * 1024))
@@ -134,7 +144,24 @@ if [ "$DOW" = "7" ]; then
   log "Воркспейсы: $WS_NOTE"
 fi
 
-# ── 4. Манифест ──────────────────────────────────────────────────────────
+# ── 4. Конфигурация развёртывания (под шифром) ───────────────────────────
+FAILED_STEP="выгрузка конфигурации развёртывания"
+if [ ! -s "$RECIPIENTS" ]; then
+  FAILED_STEP="нет файла получателей age ($RECIPIENTS) — конфигурацию шифровать нечем"
+  false
+fi
+log "Конфигурация: шифруем env и секреты"
+tar czf - --absolute-names "${ENV_PATHS[@]}" \
+  | age -R "$RECIPIENTS" -o "$OUT/env-$TS.tar.gz.age"
+ENV_SIZE=$(stat -c %s "$OUT/env-$TS.tar.gz.age")
+log "Конфигурация: $((ENV_SIZE / 1024)) КБ (зашифровано)"
+# Пустой или крошечный архив означает, что пути разъехались после переустановки.
+if [ "$ENV_SIZE" -lt 1024 ]; then
+  FAILED_STEP="архив конфигурации подозрительно мал ($ENV_SIZE байт) — проверить ENV_PATHS"
+  false
+fi
+
+# ── 5. Манифест ──────────────────────────────────────────────────────────
 FAILED_STEP="запись манифеста"
 MANIFEST="$OUT/manifest-$TS.txt"
 {
@@ -144,10 +171,13 @@ MANIFEST="$OUT/manifest-$TS.txt"
   echo "воркспейсы:    ${WORKSPACES[*]}"
   echo ""
   echo "содержимое:"
-  ( cd "$OUT" && sha256sum ./*.tar.gz )
+  ( cd "$OUT" && sha256sum ./*.tar.gz ./*.tar.gz.age )
+  echo ""
+  echo "env-*.tar.gz.age расшифровывается ключом из ~/.config/huly/backup-age-key.txt:"
+  echo "  age -d -i <ключ> env-<ts>.tar.gz.age | tar xzf - -C <каталог>"
 } > "$MANIFEST"
 
-# ── 5. Выгрузка ──────────────────────────────────────────────────────────
+# ── 6. Выгрузка ──────────────────────────────────────────────────────────
 FAILED_STEP="выгрузка в S3"
 DEST="s3://$S3_BUCKET/$S3_PREFIX/daily/$DATE"
 log "S3: выгружаем в $DEST"
@@ -169,7 +199,7 @@ copy_to() {
 if [ "$DOW" = "7" ]; then copy_to weekly; fi
 if [ "$DOM" = "01" ]; then copy_to monthly; fi
 
-# ── 6. Ротация ───────────────────────────────────────────────────────────
+# ── 7. Ротация ───────────────────────────────────────────────────────────
 FAILED_STEP="ротация"
 prune() {
   local tier="$1" keep="$2"
@@ -193,7 +223,7 @@ prune monthly 3
 # Локально держим только последний прогон — S3 основное хранилище.
 find "$OUT" -type f -mtime +1 -delete 2>/dev/null || true
 
-log "=== готово: cockroach $((CR_SIZE/1024/1024)) МБ, minio $((MINIO_SIZE/1024/1024)) МБ, воркспейсы $WS_NOTE ==="
+log "=== готово: cockroach $((CR_SIZE/1024/1024)) МБ, minio $((MINIO_SIZE/1024/1024)) МБ, воркспейсы $WS_NOTE, конфигурация $((ENV_SIZE/1024)) КБ ==="
 
 if [ "$DOW" = "7" ]; then
   notify "$(printf '%s\n' \
@@ -201,5 +231,6 @@ if [ "$DOW" = "7" ]; then
     "CockroachDB: $((CR_SIZE/1024/1024)) МБ" \
     "MinIO: $((MINIO_SIZE/1024/1024)) МБ" \
     "Воркспейсы: ${WS_NOTE}" \
+    "Конфигурация: $((ENV_SIZE/1024)) КБ" \
     "Хранится: ${S3_PREFIX}/{daily,weekly,monthly} в ${S3_BUCKET}")"
 fi
