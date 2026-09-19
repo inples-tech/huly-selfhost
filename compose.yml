@@ -624,6 +624,40 @@ services:
     networks:
       - huly_net
 
+  # Интеграция Google Calendar. Образ публичный и, в отличие от аккаунт-интеграции
+  # Telegram, реально отдаёт REST, которого ждёт фронт: /signin, /signin/code,
+  # /signout, /push. Токены сотрудников сервис держит в account и kvs, своей БД у него нет.
+  #
+  # WATCH_URL — адрес, который сервис передаёт Google при подписке на изменения
+  # календаря. Google шлёт туда вебхуки, поэтому адрес обязан быть публичным и
+  # домен — подтверждённым во владении в том же проекте Google Cloud.
+  #
+  # Credentials — JSON OAuth-клиента целиком (тип «веб-приложение»), сервис берёт из
+  # него web.redirect_uris[0]. Имя переменной именно с заглавной C, так в коде сервиса.
+  # Файл лежит вне git и вне Dokploy по тем же причинам, что и ключ GitHub App:
+  # панель срезает кавычки в .env, и JSON рассыпается на «переменные».
+  calendar:
+    image: hardcoreeng/calendar:${HULY_VERSION}
+    environment:
+      - PORT=8095
+      - SECRET=${SECRET}
+      - SERVICE_ID=calendar-service
+      - ACCOUNTS_URL=http://account:3000
+      - STATS_URL=http://stats:4900
+      - KVS_URL=http://kvs:8094
+      - WATCH_URL=http${SECURE:+s}://${HOST_ADDRESS}/_calendar/push
+      - INIT_LIMIT=50
+    env_file:
+      - /etc/huly-secrets/google.env
+    depends_on:
+      account:
+        condition: service_started
+      kvs:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - huly_net
+
   # Docker сам по себе на unhealthy не реагирует: restart-политика смотрит только на то,
   # жив ли процесс. Autoheal раз в 30 секунд перезапускает контейнеры, помеченные
   # autoheal=true, — сейчас это только github. Сокет монтируется read-only; для restart
