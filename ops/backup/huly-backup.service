@@ -1,0 +1,12 @@
+[Unit]
+Description=Бэкап Huly: CockroachDB, MinIO, логические бэкапы воркспейсов
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/huly-backup/backup.sh
+# Прогон с логическими бэкапами воркспейсов занимает ~4 минуты; берём запас.
+TimeoutStartSec=3h
+Nice=10
+IOSchedulingClass=idle

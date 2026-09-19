@@ -1,0 +1,11 @@
+[Unit]
+Description=Ночной бэкап Huly (02:30 UTC / 05:30 МСК)
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+# Хост может быть выключен в момент срабатывания — догнать при старте.
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target
