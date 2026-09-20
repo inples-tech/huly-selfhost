@@ -181,6 +181,19 @@ server {
         proxy_pass http://$up_github:3500;
     }
 
+    # Google Calendar. Сюда же Google шлёт вебхуки об изменениях (/_calendar/push),
+    # поэтому location должен работать и без авторизации Huly.
+    location /_calendar {
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        set $up_calendar calendar;
+        rewrite ^/_calendar(/.*)$ $1 break;
+        proxy_pass http://$up_calendar:8095;
+    }
+
     # location /_export {
     #     proxy_set_header host $host;
     #     proxy_set_header x-real-ip $remote_addr;

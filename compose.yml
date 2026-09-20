@@ -13,6 +13,13 @@ x-wait-queue: &wait-queue >-
   do echo "ждём redpanda:9092"; sleep 2; done;
   exec "$$0" "$$@"
 
+# То же самое для транзактора. Сервисы-интеграции подключаются к нему по websocket
+# один раз при старте: не достучались — молча живут дальше и ничего не синхронизируют.
+x-wait-transactor: &wait-transactor >-
+  until (exec 3<>/dev/tcp/transactor/3333) 2>/dev/null;
+  do echo "ждём transactor:3333"; sleep 2; done;
+  exec "$$0" "$$@"
+
 services:
   nginx:
     image: "nginx:1.21.3"
@@ -351,9 +358,89 @@ services:
     # Файл лежит на хосте вне git и вне Dokploy: /etc/huly-secrets/github.env (0600).
     env_file:
       - /etc/huly-secrets/github.env
+    command: ["bash", "-c", *wait-transactor, "node", "bundle.js"]
+    # Сервис подключается к транзактору один раз при старте и переподключаться не умеет.
+    # Транзактор перезапустился — его сессия закрывается («session hang, closing» в логе
+    # транзактора), и дальше каждое событие от GitHub падает на ConnectionClosed в
+    # _getAccountRaw. Контейнер при этом здоров: процесс жив, порт слушает, ошибки видно
+    # только в логе. 18.09.2026 так потерялись четыре часа вебхуков и три PR по edlegal-web.
+    # Healthcheck смотрит на живое TCP-соединение с transactor:3333 в /proc/net/tcp
+    # (0D05 = 3333, состояние 01 = ESTABLISHED); порвалось — контейнер уходит в unhealthy,
+    # и его перезапускает autoheal. В образе нет ни curl, ни wget, поэтому проверка на node.
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - |
+          const fs=require('fs'),dns=require('dns');
+          dns.lookup('transactor',(e,ip)=>{
+            if(e)process.exit(1);
+            const want=ip.split('.').reverse().map(o=>(+o).toString(16).padStart(2,'0')).join('').toUpperCase()+':0D05';
+            const est=fs.readFileSync('/proc/net/tcp','utf8').split('\n').slice(1).filter(Boolean)
+              .some(r=>{const f=r.trim().split(/\s+/);return f[2]===want&&f[3]==='01'});
+            process.exit(est?0:1);
+          });
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    labels:
+      - autoheal=true
+    depends_on:
+      transactor:
+        condition: service_started
     restart: unless-stopped
     networks:
       - huly_net
+
+  # Интеграция Google Calendar. Образ публичный и, в отличие от аккаунт-интеграции
+  # Telegram, реально отдаёт REST, которого ждёт фронт: /signin, /signin/code,
+  # /signout, /push. Токены сотрудников сервис держит в account и kvs, своей БД у него нет.
+  #
+  # WATCH_URL — адрес, который сервис передаёт Google при подписке на изменения
+  # календаря. Google шлёт туда вебхуки, поэтому адрес обязан быть публичным и
+  # домен — подтверждённым во владении в том же проекте Google Cloud.
+  #
+  # Credentials — JSON OAuth-клиента целиком (тип «веб-приложение»), сервис берёт из
+  # него web.redirect_uris[0]. Имя переменной именно с заглавной C, так в коде сервиса.
+  # Файл лежит вне git и вне Dokploy по тем же причинам, что и ключ GitHub App:
+  # панель срезает кавычки в .env, и JSON рассыпается на «переменные».
+  calendar:
+    image: hardcoreeng/calendar:${HULY_VERSION}
+    environment:
+      - PORT=8095
+      - SECRET=${SECRET}
+      - SERVICE_ID=calendar-service
+      - ACCOUNTS_URL=http://account:3000
+      - STATS_URL=http://stats:4900
+      - KVS_URL=http://kvs:8094
+      - WATCH_URL=http${SECURE:+s}://${HOST_ADDRESS}/_calendar/push
+      - INIT_LIMIT=50
+    env_file:
+      - /etc/huly-secrets/google.env
+    depends_on:
+      account:
+        condition: service_started
+      kvs:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - huly_net
+
+  # Docker сам по себе на unhealthy не реагирует: restart-политика смотрит только на то,
+  # жив ли процесс. Autoheal раз в 30 секунд перезапускает контейнеры, помеченные
+  # autoheal=true, — сейчас это только github. Сокет монтируется read-only; для restart
+  # этого хватает, докер проверяет права не по флагу монтирования, а по доступу к сокету.
+  autoheal:
+    image: willfarrell/autoheal:1.2.0
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_INTERVAL=30
+      - AUTOHEAL_START_PERIOD=120
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
 
   fulltext:
     image: hardcoreeng/fulltext:${HULY_VERSION}
@@ -455,7 +542,7 @@ services:
   # inples-tech/huly-meetscribe, образ собирается в GitHub Actions и приезжает
   # из GHCR: на этом хосте рядом живёт боевой Huly, собирать здесь нельзя.
   meetscribe:
-    image: ghcr.io/inples-lts/huly-meetscribe:latest
+    image: ghcr.io/inples-tech/huly-meetscribe:latest
     # Без этого docker compose up -d не перекачивает изменившийся тег latest:
     # контейнер молча продолжает работать на старом образе, и выкатка правки
     # выглядит успешной, ничего не изменив.

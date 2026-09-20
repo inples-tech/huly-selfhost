@@ -1,0 +1,8 @@
+/var/log/huly-backup.log {
+    su root root
+    weekly
+    rotate 8
+    compress
+    missingok
+    notifempty
+}

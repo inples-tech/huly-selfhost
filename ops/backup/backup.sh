@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+#
+# HLY-7 — ночной бэкап Huly (erp.inples.ru).
+#
+# Что кладём:
+#   1. Полный логический бэкап кластера CockroachDB (BACKUP INTO nodelocal) —
+#      это и ядро всех воркспейсов, и global_account с реестром и пользователями.
+#   2. Том MinIO целиком — вложения, аватары, записи созвонов. Блобы неизменяемые,
+#      так что tar на живом сервисе безопасен.
+#   3. По воскресеньям — логический бэкап каждого воркспейса штатным tool backup.
+#      Он переносим: разворачивается в другую инсталляцию Huly и служит страховкой
+#      на случай, если формат кластерного бэкапа окажется нечитаемым (HLY-25).
+#   4. Конфигурация развёртывания под age: env компоуза Dokploy и /etc/huly-secrets.
+#      Данные без неё мертвы — SECRET подписывает все токены, а приватный ключ
+#      GitHub App из репозитория не воспроизводится. Шифрование асимметричное:
+#      на хосте лежит только публичный ключ, расшифровать бэкап сервер не может.
+#
+# Куда: s3://<bucket>/huly-backup/{daily,weekly,monthly}/<дата>/
+# Ротация: 7 ежедневных, 4 еженедельных, 3 ежемесячных.
+# При любой ошибке — сообщение в Telegram. Молчащий бэкап незаметно умирает,
+# поэтому раз в неделю приходит и сводка об успехе.
+#
+set -Eeuo pipefail
+
+STACK="compose-reboot-digital-port-j1flk6"
+WORK="/opt/huly-backup"
+OUT="$WORK/out"
+STATE="$WORK/state"
+LOG="/var/log/huly-backup.log"
+
+S3_ENDPOINT="https://s3.ru1.storage.beget.cloud"
+S3_BUCKET="da52bb93d7ea-edlegal-s3"
+S3_PREFIX="huly-backup"
+AWS="$WORK/venv/bin/aws"
+
+WORKSPACES=(inpleslts bnlegal danilaq)
+
+# Конфигурация развёртывания: без неё восстановленные данные не запустить.
+# SECRET из huly_v7.conf подписывает все токены — без него в бэкап войти нельзя.
+RECIPIENTS="$WORK/recipients.txt"
+COMPOSE_CODE="/etc/dokploy/compose/${STACK}/code"
+ENV_PATHS=("$COMPOSE_CODE/huly_v7.conf" /etc/huly-secrets)
+
+# Нижние границы размера: если архив меньше, бэкап считается провалившимся.
+MIN_CR_BYTES=$((5 * 1024 * 1024))
+MIN_MINIO_BYTES=$((10 * 1024 * 1024))
+
+TS="$(date -u +%Y%m%dT%H%M%SZ)"
+DATE="$(date -u +%F)"
+DOW="$(date -u +%u)"   # 7 = воскресенье
+DOM="$(date -u +%d)"
+
+CR_CONTAINER="${STACK}-cockroach-1"
+CR_EXTERN="/var/lib/docker/volumes/${STACK}_cr_data/_data/extern"
+MINIO_DATA="/var/lib/docker/volumes/${STACK}_files/_data"
+NETWORK="${STACK}_huly_net"
+
+mkdir -p "$OUT" "$STATE"
+
+log() { echo "[$(date -u '+%F %T') UTC] $*" | tee -a "$LOG"; }
+
+notify() {
+  local text="$1"
+  local token chat
+  token="$(docker exec "${STACK}-meetscribe-1" printenv TELEGRAM_BOT_TOKEN 2>/dev/null || true)"
+  chat="$(docker exec "${STACK}-meetscribe-1" printenv TELEGRAM_CHAT_ID 2>/dev/null || true)"
+  if [ -z "$token" ]; then return 0; fi
+  curl -sS -m 20 -o /dev/null \
+    "https://api.telegram.org/bot${token}/sendMessage" \
+    --data-urlencode "chat_id=${chat}" \
+    --data-urlencode "text=${text}" \
+    --data-urlencode "parse_mode=HTML" || true
+}
+
+# Все рекурсивные удаления в этом скрипте идут через одну дверь. Ключ к бакету —
+# общий с ночными дампами Postgres edlegal и RAG-репликой, и права на удаление у него
+# на весь бакет. Ошибка в переменной пути увезла бы "s3 rm --recursive" в чужие данные,
+# поэтому цель проверяется по шаблону: свой бакет, свой префикс, каталог-дата на конце.
+s3_rm_guarded() {
+  local uri="$1"
+  if ! [[ "$uri" =~ ^s3://${S3_BUCKET}/${S3_PREFIX}/(daily|weekly|monthly)/[0-9]{4}-[0-9]{2}-[0-9]{2}/?$ ]]; then
+    FAILED_STEP="ПРЕДОХРАНИТЕЛЬ: удаление '$uri' не похоже на каталог-дату бэкапа Huly, отказано"
+    return 1
+  fi
+  "$AWS" --endpoint-url "$S3_ENDPOINT" s3 rm "$uri" --recursive --only-show-errors
+}
+
+FAILED_STEP="запуск"
+on_error() {
+  local code=$?
+  log "ОШИБКА на шаге: $FAILED_STEP (код $code)"
+  notify "$(printf '%s\n' \
+    "🔴 <b>Бэкап Huly не прошёл</b>" \
+    "Шаг: ${FAILED_STEP}" \
+    "Код выхода: ${code}" \
+    "Хост: erp.inples.ru" \
+    "Лог: ${LOG}")"
+  # не оставляем мусор в extern — он лежит внутри тома cockroach
+  rm -rf "${CR_EXTERN:?}/run-$TS" 2>/dev/null || true
+  exit "$code"
+}
+trap on_error ERR
+
+# Один экземпляр за раз: прошлый прогон мог зависнуть на выгрузке.
+exec 9>"$WORK/.lock"
+flock -n 9 || { log "предыдущий прогон ещё идёт, выходим"; exit 0; }
+
+log "=== старт $TS ==="
+# Захватывать и *.age тоже: иначе шифрованные env копятся и уезжают в S3 повторно.
+rm -f "$OUT"/*.tar.gz "$OUT"/*.age "$OUT"/manifest-*.txt 2>/dev/null || true
+
+# ── 1. CockroachDB ───────────────────────────────────────────────────────
+FAILED_STEP="полный бэкап CockroachDB"
+log "CockroachDB: BACKUP INTO nodelocal://1/run-$TS"
+CR_URL="$(docker exec "${STACK}-account-1" printenv DB_URL)?sslmode=disable"
+docker exec -e U="$CR_URL" "$CR_CONTAINER" bash -lc \
+  "cockroach sql --url \"\$U\" --execute \"BACKUP INTO 'nodelocal://1/run-$TS' AS OF SYSTEM TIME '-10s';\"" \
+  >>"$LOG" 2>&1
+
+FAILED_STEP="упаковка бэкапа CockroachDB"
+tar czf "$OUT/cockroach-$TS.tar.gz" -C "$CR_EXTERN" "run-$TS"
+rm -rf "${CR_EXTERN:?}/run-$TS"
+CR_SIZE=$(stat -c %s "$OUT/cockroach-$TS.tar.gz")
+log "CockroachDB: $((CR_SIZE / 1024 / 1024)) МБ"
+[ "$CR_SIZE" -ge "$MIN_CR_BYTES" ] || { FAILED_STEP="бэкап CockroachDB подозрительно мал ($CR_SIZE байт)"; false; }
+
+# ── 2. MinIO ─────────────────────────────────────────────────────────────
+FAILED_STEP="упаковка тома MinIO"
+log "MinIO: упаковываем $MINIO_DATA"
+# MinIO пишет в тома во время упаковки, и tar на этом возвращает 1
+# ("file changed as we read it") — архив при этом целый, меняются отдельные блобы.
+# Код 2 и выше — настоящая ошибка. Целостность страхует проверка размера ниже.
+set +e
+tar czf "$OUT/minio-$TS.tar.gz" -C "$MINIO_DATA" . 2>>"$LOG"
+TAR_RC=$?
+set -e
+if [ "$TAR_RC" -ge 2 ]; then
+  FAILED_STEP="tar на томе MinIO вернул $TAR_RC — это не предупреждение, а ошибка"
+  false
+fi
+if [ "$TAR_RC" -eq 1 ]; then
+  log "MinIO: файлы менялись во время упаковки (tar=1) — для блобов это ожидаемо"
+fi
+MINIO_SIZE=$(stat -c %s "$OUT/minio-$TS.tar.gz")
+log "MinIO: $((MINIO_SIZE / 1024 / 1024)) МБ"
+[ "$MINIO_SIZE" -ge "$MIN_MINIO_BYTES" ] || { FAILED_STEP="архив MinIO подозрительно мал ($MINIO_SIZE байт)"; false; }
+
+# ── 3. Логические бэкапы воркспейсов (по воскресеньям) ───────────────────
+WS_NOTE="—"
+if [ "$DOW" = "7" ]; then
+  FAILED_STEP="логический бэкап воркспейсов"
+  log "Воркспейсы: логический бэкап (переносимый формат)"
+  SECRET="$(docker exec "${STACK}-account-1" printenv SERVER_SECRET)"
+  DBU="$(docker exec "${STACK}-account-1" printenv DB_URL)"
+  HV="$(docker inspect --format '{{index .Config.Image}}' "${STACK}-account-1" | sed 's/.*://')"
+  mkdir -p "$STATE/ws"
+  for ws in "${WORKSPACES[@]}"; do
+    log "  воркспейс $ws"
+    docker run --rm --network "$NETWORK" \
+      -e SERVER_SECRET="$SECRET" -e DB_URL="$DBU" -e ACCOUNT_DB_URL="$DBU" \
+      -e STORAGE_CONFIG="minio|minio?accessKey=minioadmin&secretKey=minioadmin" \
+      -e ACCOUNTS_URL="http://account:3000" -e TRANSACTOR_URL="ws://transactor:3333" \
+      -e QUEUE_CONFIG="redpanda:9092" -e STATS_URL="http://stats:4900" \
+      -v "$STATE/ws:/backup" \
+      "hardcoreeng/tool:${HV}" bundle.js backup "/backup/$ws" "$ws" \
+      --blobLimit 200 --keepSnapshots 8 >>"$LOG" 2>&1
+  done
+  tar czf "$OUT/workspaces-$TS.tar.gz" -C "$STATE" ws
+  WS_SIZE=$(stat -c %s "$OUT/workspaces-$TS.tar.gz")
+  WS_NOTE="$((WS_SIZE / 1024 / 1024)) МБ"
+  log "Воркспейсы: $WS_NOTE"
+fi
+
+# ── 4. Конфигурация развёртывания (под шифром) ───────────────────────────
+FAILED_STEP="выгрузка конфигурации развёртывания"
+if [ ! -s "$RECIPIENTS" ]; then
+  FAILED_STEP="нет файла получателей age ($RECIPIENTS) — конфигурацию шифровать нечем"
+  false
+fi
+log "Конфигурация: шифруем env и секреты"
+tar czf - --absolute-names "${ENV_PATHS[@]}" \
+  | age -R "$RECIPIENTS" -o "$OUT/env-$TS.tar.gz.age"
+ENV_SIZE=$(stat -c %s "$OUT/env-$TS.tar.gz.age")
+log "Конфигурация: $((ENV_SIZE / 1024)) КБ (зашифровано)"
+# Пустой или крошечный архив означает, что пути разъехались после переустановки.
+if [ "$ENV_SIZE" -lt 1024 ]; then
+  FAILED_STEP="архив конфигурации подозрительно мал ($ENV_SIZE байт) — проверить ENV_PATHS"
+  false
+fi
+
+# ── 5. Манифест ──────────────────────────────────────────────────────────
+FAILED_STEP="запись манифеста"
+MANIFEST="$OUT/manifest-$TS.txt"
+{
+  echo "прогон:        $TS"
+  echo "хост:          $(hostname) / erp.inples.ru"
+  echo "версия Huly:   $(docker inspect --format '{{.Config.Image}}' "${STACK}-account-1")"
+  echo "воркспейсы:    ${WORKSPACES[*]}"
+  echo ""
+  echo "контрольные числа на момент бэкапа (сверяются учениями HLY-8):"
+  for chk in \
+    "workspace:SELECT count(*) FROM global_account.workspace;" \
+    "account:SELECT count(*) FROM global_account.account;" \
+    "tx:SELECT count(*) FROM defaultdb.tx;" \
+    "task:SELECT count(*) FROM defaultdb.task;" \
+    "github_sync:SELECT count(*) FROM defaultdb.github_sync;" \
+    "collaborator:SELECT count(*) FROM defaultdb.collaborator;"
+  do
+    n="${chk%%:*}"; q="${chk#*:}"
+    v="$(docker exec "$CR_CONTAINER" cockroach sql --url "$CR_URL" \
+         --execute "$q" --format=csv 2>/dev/null | tail -1 | tr -d '\r')"
+    echo "count.$n=$v"
+  done
+  echo ""
+  echo "содержимое:"
+  ( cd "$OUT" && sha256sum ./*.tar.gz ./*.tar.gz.age )
+  echo ""
+  echo "env-*.tar.gz.age расшифровывается ключом из ~/.config/huly/backup-age-key.txt:"
+  echo "  age -d -i <ключ> env-<ts>.tar.gz.age | tar xzf - -C <каталог>"
+} > "$MANIFEST"
+
+# ── 6. Выгрузка ──────────────────────────────────────────────────────────
+FAILED_STEP="выгрузка в S3"
+DEST="s3://$S3_BUCKET/$S3_PREFIX/daily/$DATE"
+log "S3: выгружаем в $DEST"
+# Каталог даты должен содержать ровно один прогон: повторный запуск (ретрай после
+# сбоя) иначе накапливает архивы, а ротация удаляет каталоги целиком и их не видит.
+s3_rm_guarded "$DEST" || true
+for f in "$OUT"/*; do
+  "$AWS" --endpoint-url "$S3_ENDPOINT" s3 cp "$f" "$DEST/$(basename "$f")" --only-show-errors
+done
+
+copy_to() {
+  local tier="$1"
+  log "S3: копия в $tier/$DATE"
+  s3_rm_guarded "s3://$S3_BUCKET/$S3_PREFIX/$tier/$DATE" || true
+  "$AWS" --endpoint-url "$S3_ENDPOINT" s3 cp "$DEST" \
+    "s3://$S3_BUCKET/$S3_PREFIX/$tier/$DATE" --recursive --only-show-errors
+}
+if [ "$DOW" = "7" ]; then copy_to weekly; fi
+if [ "$DOM" = "01" ]; then copy_to monthly; fi
+
+# ── 7. Ротация ───────────────────────────────────────────────────────────
+FAILED_STEP="ротация"
+prune() {
+  local tier="$1" keep="$2"
+  local dirs
+  # Пустой ярус — это не ошибка: s3 ls по несуществующему префиксу возвращает 1.
+  dirs="$({ "$AWS" --endpoint-url "$S3_ENDPOINT" s3 ls "s3://$S3_BUCKET/$S3_PREFIX/$tier/" || true; } \
+    | awk '/PRE/ {print $2}' | sed 's#/$##' | sort)"
+  local total
+  total="$(echo "$dirs" | grep -c . || true)"
+  if [ "$total" -le "$keep" ]; then return 0; fi
+  echo "$dirs" | head -n $((total - keep)) | while read -r d; do
+    [ -z "$d" ] && continue
+    log "  удаляем $tier/$d"
+    s3_rm_guarded "s3://$S3_BUCKET/$S3_PREFIX/$tier/$d"
+  done
+}
+prune daily 7
+prune weekly 4
+prune monthly 3
+
+# Локально держим только последний прогон — S3 основное хранилище.
+find "$OUT" -type f -mtime +1 -delete 2>/dev/null || true
+
+log "=== готово: cockroach $((CR_SIZE/1024/1024)) МБ, minio $((MINIO_SIZE/1024/1024)) МБ, воркспейсы $WS_NOTE, конфигурация $((ENV_SIZE/1024)) КБ ==="
+
+if [ "$DOW" = "7" ]; then
+  notify "$(printf '%s\n' \
+    "🟢 <b>Недельная сводка бэкапов Huly</b>" \
+    "CockroachDB: $((CR_SIZE/1024/1024)) МБ" \
+    "MinIO: $((MINIO_SIZE/1024/1024)) МБ" \
+    "Воркспейсы: ${WS_NOTE}" \
+    "Конфигурация: $((ENV_SIZE/1024)) КБ" \
+    "Хранится: ${S3_PREFIX}/{daily,weekly,monthly} в ${S3_BUCKET}")"
+fi
