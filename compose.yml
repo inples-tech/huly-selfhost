@@ -247,6 +247,13 @@ services:
       - QUEUE_CONFIG=redpanda:9092
       - MAIL_URL=http://mail:8097
       - MAIL_AUTH_TOKEN=${MAIL_AUTH_TOKEN}
+      # Регистрация закрыта: инстанс рабочий, аккаунты заводятся приглашением.
+      # Сервис читает переменную как DISABLE_SIGNUP !== "true", поэтому значение
+      # должно быть строкой "true" — любое другое снова открывает регистрацию.
+      - DISABLE_SIGNUP=true
+      # Админ-панель Huly (список воркспейсов, миграции, управление аккаунтами).
+      # Список адресов через запятую; доступ даётся владельцу адреса после входа.
+      - ADMIN_EMAILS=oleg@inples.ru
     command: ["bash", "-c", *wait-queue, "node", "bundle.js"]
     depends_on:
       redpanda:
@@ -315,6 +322,8 @@ services:
       - LAST_NAME_FIRST=${LAST_NAME_FIRST:-true}
       - DESKTOP_UPDATES_CHANNEL=${DESKTOP_CHANNEL}
       - DISABLED_FEATURES=auto-translate,mailboxes
+      # Фронт прячет форму регистрации; сама проверка живёт в account.
+      - DISABLE_SIGNUP=true
     restart: unless-stopped
     networks:
       - huly_net
