@@ -1,0 +1,11 @@
+[Unit]
+Description=Учения по восстановлению Huly (HLY-8): RESTORE из S3 и сверка с манифестом
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/huly-backup/restore-drill.sh quick
+TimeoutStartSec=1h
+Nice=10
+IOSchedulingClass=idle

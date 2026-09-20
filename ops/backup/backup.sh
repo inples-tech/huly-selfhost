@@ -106,7 +106,8 @@ exec 9>"$WORK/.lock"
 flock -n 9 || { log "предыдущий прогон ещё идёт, выходим"; exit 0; }
 
 log "=== старт $TS ==="
-rm -f "$OUT"/*.tar.gz "$OUT"/manifest-*.txt 2>/dev/null || true
+# Захватывать и *.age тоже: иначе шифрованные env копятся и уезжают в S3 повторно.
+rm -f "$OUT"/*.tar.gz "$OUT"/*.age "$OUT"/manifest-*.txt 2>/dev/null || true
 
 # ── 1. CockroachDB ───────────────────────────────────────────────────────
 FAILED_STEP="полный бэкап CockroachDB"
@@ -195,6 +196,21 @@ MANIFEST="$OUT/manifest-$TS.txt"
   echo "хост:          $(hostname) / erp.inples.ru"
   echo "версия Huly:   $(docker inspect --format '{{.Config.Image}}' "${STACK}-account-1")"
   echo "воркспейсы:    ${WORKSPACES[*]}"
+  echo ""
+  echo "контрольные числа на момент бэкапа (сверяются учениями HLY-8):"
+  for chk in \
+    "workspace:SELECT count(*) FROM global_account.workspace;" \
+    "account:SELECT count(*) FROM global_account.account;" \
+    "tx:SELECT count(*) FROM defaultdb.tx;" \
+    "task:SELECT count(*) FROM defaultdb.task;" \
+    "github_sync:SELECT count(*) FROM defaultdb.github_sync;" \
+    "collaborator:SELECT count(*) FROM defaultdb.collaborator;"
+  do
+    n="${chk%%:*}"; q="${chk#*:}"
+    v="$(docker exec "$CR_CONTAINER" cockroach sql --url "$CR_URL" \
+         --execute "$q" --format=csv 2>/dev/null | tail -1 | tr -d '\r')"
+    echo "count.$n=$v"
+  done
   echo ""
   echo "содержимое:"
   ( cd "$OUT" && sha256sum ./*.tar.gz ./*.tar.gz.age )

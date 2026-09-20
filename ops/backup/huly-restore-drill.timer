@@ -1,0 +1,10 @@
+[Unit]
+Description=Ежемесячные учения по восстановлению Huly (1-е число, 04:00 UTC)
+
+[Timer]
+OnCalendar=*-*-01 04:00:00 UTC
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target
