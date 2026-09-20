@@ -1,0 +1,12 @@
+[Unit]
+Description=Сторож очереди Huly (HLY-5): не отвалились ли сервисы от redpanda
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/huly-backup/queue-watchdog.sh
+TimeoutStartSec=10m
+# Код 1 — это найденная проблема, а не поломка самого сторожа: она уже уехала
+# в Telegram, красить юнит в failed незачем.
+SuccessExitStatus=0 1

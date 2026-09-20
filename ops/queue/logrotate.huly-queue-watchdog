@@ -1,0 +1,8 @@
+/var/log/huly-queue-watchdog.log {
+    su root root
+    monthly
+    rotate 6
+    compress
+    missingok
+    notifempty
+}

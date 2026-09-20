@@ -1,0 +1,12 @@
+[Unit]
+Description=Проверка очереди Huly: после загрузки и раз в час
+
+[Timer]
+# Загрузка — самый опасный момент: контейнеры стартуют вперемешку.
+# Пять минут, чтобы стек успел подняться и потребители подключились.
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
