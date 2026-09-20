@@ -30,18 +30,22 @@ server {
         proxy_pass http://$up_account:3000;
     }
 
-    #location /_print {
-    #    proxy_set_header Host $host;
-    #    proxy_set_header X-Real-IP $remote_addr;
-    #    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    #    proxy_set_header X-Forwarded-Proto $scheme;
+    # Рендер markdown-вложений и печать. Фронт знает один адрес PRINT_URL:
+    # mdconvert отвечает на /convert для markdown, а docx и печать
+    # проксирует дальше в hardcoreeng/print.
+    location /_print {
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
 
-    #    proxy_http_version 1.1;
-    #    proxy_set_header Upgrade $http_upgrade;
-    #    proxy_set_header Connection "upgrade";
-    #    rewrite ^/_print(/.*)$ $1 break;
-    #    proxy_pass http://print:4005/;
-    #}
+        # Chromium в print-сервисе отрисовывает документ не мгновенно.
+        proxy_read_timeout 120s;
+
+        set $up_mdconvert mdconvert;
+        rewrite ^/_print(/.*)$ $1 break;
+        proxy_pass http://$up_mdconvert:4030;
+    }
 
     # ИИ-сервис: саммари, перевод и живая расшифровка созвонов.
     location /_aibot {

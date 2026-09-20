@@ -300,6 +300,9 @@ services:
       # Адрес ai-bot. Без него в комнате не появляется кнопка расшифровки:
       # фронт считает, что ИИ-сервиса в инсталляции нет.
       - AI_URL=http${SECURE:+s}://${HOST_ADDRESS}/_aibot
+      # Адрес сервиса рендера/печати. Без него markdown-вложения открываются
+      # сырым текстом, а превью docx и печать в PDF в интерфейсе не появляются.
+      - PRINT_URL=http${SECURE:+s}://${HOST_ADDRESS}/_print
       - GITHUB_APP=${GITHUB_APP_SLUG}
       - GITHUB_CLIENTID=${GITHUB_CLIENTID}
       - STATS_URL=http${SECURE:+s}://${HOST_ADDRESS}/_stats
@@ -312,6 +315,48 @@ services:
       - LAST_NAME_FIRST=${LAST_NAME_FIRST:-true}
       - DESKTOP_UPDATES_CHANNEL=${DESKTOP_CHANNEL}
       - DISABLED_FEATURES=auto-translate,mailboxes
+    restart: unless-stopped
+    networks:
+      - huly_net
+
+  # Рендерит markdown-вложения в HTML по контракту print-сервиса, который
+  # фронт уже умеет вызывать (DOCXViewer -> convertToHTML). Всё, что не
+  # markdown, и запросы печати уходят в print. Секретов не требует:
+  # пробрасывает токен пользователя, авторизует сам Huly.
+  mdconvert:
+    image: ghcr.io/inples-tech/huly-mdconvert:latest
+    pull_policy: always
+    environment:
+      - PORT=4030
+      - HULY_URL=http${SECURE:+s}://${HOST_ADDRESS}
+      - UPSTREAM_PRINT_URL=http://print:4005
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    restart: unless-stopped
+    networks:
+      - huly_net
+
+  # Штатный print: превью docx и печать в PDF. Внутри Chromium, поэтому
+  # память ограничена явно — рядом живёт всё остальное ядро Huly.
+  print:
+    image: hardcoreeng/print:${HULY_VERSION}
+    environment:
+      - PORT=4005
+      - SECRET=${SECRET}
+      - ACCOUNTS_URL=http://account:3000
+      - FRONT_URL=http://front:8080
+      - STATS_URL=http://stats:4900
+      - SERVICE_ID=print-service
+      - STORAGE_CONFIG=minio|minio?accessKey=minioadmin&secretKey=minioadmin
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    depends_on:
+      account:
+        condition: service_started
     restart: unless-stopped
     networks:
       - huly_net
