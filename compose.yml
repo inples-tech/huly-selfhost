@@ -22,11 +22,14 @@ x-wait-transactor: &wait-transactor >-
 
 services:
   nginx:
-    image: "nginx:1.21.3"
+    # Свой образ: конфиг вложен внутрь, а не примонтирован снаружи.
+    # Почему так — в docker/nginx/Dockerfile.
+    build:
+      context: .
+      dockerfile: docker/nginx/Dockerfile
+    image: huly-nginx-configured:${HULY_VERSION}
     ports:
       - "${HTTP_BIND}:${HTTP_PORT}:80"
-    volumes:
-      - ./.huly.nginx:/etc/nginx/conf.d/default.conf
     # nginx резолвит upstream'ы ядра при старте и падает, если имя не найдено,
     # поэтому эти контейнеры должны быть созданы раньше. Опциональные интеграции
     # сюда не добавлять — они резолвятся в рантайме через resolver в .huly.nginx.
