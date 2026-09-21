@@ -259,6 +259,33 @@ services:
     networks:
       - huly_net
 
+  # Выгрузка пространств и документов из интерфейса: Huly собирает архив и отдаёт
+  # его пользователю. Своей базы у сервиса нет — он ходит в ту же CockroachDB и
+  # в MinIO за вложениями, поэтому ему нужны DB_URL и STORAGE_CONFIG.
+  #
+  # Обязательные переменные, без любой из них падает на старте с
+  # «Missing config for attributes»: SECRET, ACCOUNTS_URL, SERVICE_ID, DB_URL.
+  export:
+    image: hardcoreeng/export:${HULY_VERSION}
+    environment:
+      - PORT=4009
+      - SECRET=${SECRET}
+      - SERVICE_ID=export-service
+      - ACCOUNTS_URL=http://account:3000
+      - STATS_URL=http://stats:4900
+      - DB_URL=${CR_DB_URL}
+      - STORAGE_CONFIG=minio|minio?accessKey=minioadmin&secretKey=minioadmin
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    depends_on:
+      account:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - huly_net
+
   # Разворачивание ссылок в чате, комментариях и документах: заголовок,
   # описание и картинка вместо голого URL. Ходит во внешний интернет сам.
   link-preview:
@@ -492,6 +519,7 @@ services:
       # напрямую, без промежуточного HTTP-запроса.
       - PULSE_URL=ws${SECURE:+s}://${HOST_ADDRESS}/_pulse
       - LINK_PREVIEW_URL=http${SECURE:+s}://${HOST_ADDRESS}/_link-preview
+      - EXPORT_URL=http${SECURE:+s}://${HOST_ADDRESS}/_export
       # Адрес, который интерфейс показывает пользователю для настройки
       # календаря на телефоне и в почтовом клиенте.
       - CALDAV_SERVER_URL=http${SECURE:+s}://${HOST_ADDRESS}/caldav
