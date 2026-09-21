@@ -195,6 +195,11 @@ server {
 
     # Опись резервных копий для раздела настроек и скачивание файлов снапшота.
     # Файлы бывают большими, поэтому буферизацию выключаем и отдаём потоком.
+    #
+    # Сервис слушает на /api/backup/<workspace>/<file>, а фронт дёргает
+    # <BACKUP_URL>/<workspace>/index.json — поэтому префикс не срезаем,
+    # а подменяем на нужный путь. С обычным rewrite-в-корень сервис отвечал бы
+    # «Not Found» на любой запрос.
     location /_backup {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -205,7 +210,7 @@ server {
         proxy_buffering off;
 
         set $up_backup backup-api;
-        rewrite ^/_backup(/.*)$ $1 break;
+        rewrite ^/_backup(/.*)$ /api/backup$1 break;
         proxy_pass http://$up_backup:4039;
     }
 
