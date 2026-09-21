@@ -234,7 +234,13 @@ services:
   # Живёт на своём поддомене: ассеты Astro запрошены по абсолютному /_astro,
   # под префиксом страница осталась бы без стилей.
   huly-schedule:
-    image: hardcoreeng/huly-schedule:${HULY_VERSION}
+    # Свой образ поверх штатного: одна заплатка, чтобы бронирование не падало.
+    # Подробности — в docker/huly-schedule/Dockerfile.
+    build:
+      context: ./docker/huly-schedule
+      args:
+        HULY_VERSION: ${HULY_VERSION}
+    image: huly-schedule-patched:${HULY_VERSION}
     environment:
       - PORT=8060
       - HOST=0.0.0.0
