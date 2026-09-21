@@ -214,6 +214,21 @@ server {
         proxy_pass http://$up_backup:4039;
     }
 
+    # Приём событий интерфейса. Батчи бывают до 10 МБ — это предел самого
+    # сервиса, поэтому тело запроса тут не режем меньше.
+    location /_analytics {
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        client_max_body_size 10m;
+
+        set $up_analytics analytics-collector;
+        rewrite ^/_analytics(/.*)$ $1 break;
+        proxy_pass http://$up_analytics:4007;
+    }
+
     # Разворачивание ссылок в чате и документах.
     location /_link-preview {
         proxy_set_header Host $host;

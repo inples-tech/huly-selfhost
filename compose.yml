@@ -344,6 +344,36 @@ services:
     networks:
       - huly_net
 
+  # Сбор событий интерфейса: клиент шлёт батчи на POST /collect, сервис их
+  # принимает и, если задан PostHog, пересылает туда. Нам это нужно не как
+  # маркетинговая аналитика, а чтобы видеть, какими модулями команда реально
+  # пользуется, и ловить клиентские ошибки.
+  #
+  # POSTHOG_HOST и POSTHOG_API_KEY намеренно не заданы: сервис проверяет их на
+  # !== undefined, и пустая строка заставила бы его слать батчи в никуда.
+  # Пока их нет, события видны только в логе контейнера строками
+  # «Received batch: N events» — хранилища у сервиса своего нет.
+  analytics-collector:
+    image: hardcoreeng/analytics-collector:${HULY_VERSION}
+    environment:
+      - PORT=4007
+      - SECRET=${SECRET}
+      - SERVICE_ID=analytics-collector-service
+      - ACCOUNTS_URL=http://account:3000
+      - STATS_URL=http://stats:4900
+      # - POSTHOG_HOST=${POSTHOG_HOST}
+      # - POSTHOG_API_KEY=${POSTHOG_API_KEY}
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    depends_on:
+      account:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - huly_net
+
   # Разворачивание ссылок в чате, комментариях и документах: заголовок,
   # описание и картинка вместо голого URL. Ходит во внешний интернет сам.
   link-preview:
@@ -579,6 +609,7 @@ services:
       - LINK_PREVIEW_URL=http${SECURE:+s}://${HOST_ADDRESS}/_link-preview
       - EXPORT_URL=http${SECURE:+s}://${HOST_ADDRESS}/_export
       - BACKUP_URL=http${SECURE:+s}://${HOST_ADDRESS}/_backup
+      - ANALYTICS_COLLECTOR_URL=http${SECURE:+s}://${HOST_ADDRESS}/_analytics
       # Адрес, который интерфейс показывает пользователю для настройки
       # календаря на телефоне и в почтовом клиенте.
       - CALDAV_SERVER_URL=http${SECURE:+s}://${HOST_ADDRESS}/caldav
