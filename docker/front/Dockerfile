@@ -20,3 +20,11 @@ FROM hardcoreeng/front:${HULY_VERSION}
 COPY branding /app/dist/branding
 
 RUN test -s /app/dist/branding/branding.json && test -s /app/dist/branding/icon-192.png
+
+# Подключаем таблицу стилей, которая подменяет знак Huly нашим логотипом.
+# Почему именно так — в комментарии внутри branding/brand.css.
+# Проверка обязательна: если разметка index.html изменится и вставка не
+# сработает, сборка должна упасть, а не выкатить фронт без брендинга.
+RUN set -eu; \
+    sed -i 's|</head>|<link rel="stylesheet" href="/branding/brand.css"></head>|' /app/dist/index.html; \
+    grep -q 'branding/brand.css' /app/dist/index.html
