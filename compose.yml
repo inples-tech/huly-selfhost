@@ -289,6 +289,61 @@ services:
     networks:
       - huly_net
 
+  # Резервные копии воркспейсов силами самой Huly. Два сервиса, и нужны оба:
+  # backup раз в час снимает снапшот каждого воркспейса в бакет, backup-api
+  # отдаёт интерфейсу опись — раздел «Резервные копии» в настройках дёргает
+  # <BACKUP_URL>/<workspaceDataId>/index.json и без этого сервиса пуст.
+  # Раздел виден только владельцу воркспейса.
+  #
+  # Снапшоты кладём в наш MinIO, бакет backups. Это не замена ночному бэкапу
+  # HLY-7: тот уезжает на внешний S3 Beget и защищает от потери хоста, а этот
+  # даёт восстановление отдельного воркспейса и разбор по доменам прямо из UI.
+  # Понадобится вынести наружу — достаточно поменять STORAGE на s3-строку.
+  backup:
+    image: hardcoreeng/backup:${HULY_VERSION}
+    environment:
+      - SECRET=${SECRET}
+      - SERVICE_ID=backup-service
+      - ACCOUNTS_URL=http://account:3000
+      - ACCOUNTS_DB_URL=${CR_DB_URL}
+      - DB_URL=${CR_DB_URL}
+      - STATS_URL=http://stats:4900
+      - BUCKET_NAME=backups
+      - STORAGE=minio|minio?accessKey=minioadmin&secretKey=minioadmin
+      - WORKSPACE_STORAGE=minio|minio?accessKey=minioadmin&secretKey=minioadmin
+      # Раз в час, снапшотов держим 84 — это умолчания сервиса, зафиксированы явно.
+      - INTERVAL=3600
+      - KEEP_SNAPSHOTS=84
+      - PARALLEL=1
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    depends_on:
+      account:
+        condition: service_started
+      minio:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - huly_net
+
+  backup-api:
+    image: hardcoreeng/backup-api:${HULY_VERSION}
+    environment:
+      - PORT=4039
+      - SECRET=${SECRET}
+      - ACCOUNTS_URL=http://account:3000
+      - BUCKET_NAME=backups
+      - STORAGE=minio|minio?accessKey=minioadmin&secretKey=minioadmin
+      - STATS_URL=http://stats:4900
+    depends_on:
+      account:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - huly_net
+
   # Разворачивание ссылок в чате, комментариях и документах: заголовок,
   # описание и картинка вместо голого URL. Ходит во внешний интернет сам.
   link-preview:
@@ -523,6 +578,7 @@ services:
       - PULSE_URL=ws${SECURE:+s}://${HOST_ADDRESS}/_pulse
       - LINK_PREVIEW_URL=http${SECURE:+s}://${HOST_ADDRESS}/_link-preview
       - EXPORT_URL=http${SECURE:+s}://${HOST_ADDRESS}/_export
+      - BACKUP_URL=http${SECURE:+s}://${HOST_ADDRESS}/_backup
       # Адрес, который интерфейс показывает пользователю для настройки
       # календаря на телефоне и в почтовом клиенте.
       - CALDAV_SERVER_URL=http${SECURE:+s}://${HOST_ADDRESS}/caldav

@@ -193,6 +193,22 @@ server {
         proxy_pass http://$up_caldav_wk:4000;
     }
 
+    # Опись резервных копий для раздела настроек и скачивание файлов снапшота.
+    # Файлы бывают большими, поэтому буферизацию выключаем и отдаём потоком.
+    location /_backup {
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_read_timeout 600s;
+        proxy_buffering off;
+
+        set $up_backup backup-api;
+        rewrite ^/_backup(/.*)$ $1 break;
+        proxy_pass http://$up_backup:4039;
+    }
+
     # Разворачивание ссылок в чате и документах.
     location /_link-preview {
         proxy_set_header Host $host;
