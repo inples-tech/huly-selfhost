@@ -647,7 +647,8 @@ services:
       - EXPORT_URL=http${SECURE:+s}://${HOST_ADDRESS}/_export
       - BACKUP_URL=http${SECURE:+s}://${HOST_ADDRESS}/_backup
       - ANALYTICS_COLLECTOR_URL=http${SECURE:+s}://${HOST_ADDRESS}/_analytics
-      - STREAM_URL=http${SECURE:+s}://${HOST_ADDRESS}/_stream
+      # Без префикса: сервис отдаёт абсолютные адреса со своим путём /recording.
+      - STREAM_URL=http${SECURE:+s}://${HOST_ADDRESS}/recording
       # Адрес, который интерфейс показывает пользователю для настройки
       # календаря на телефоне и в почтовом клиенте.
       - CALDAV_SERVER_URL=http${SECURE:+s}://${HOST_ADDRESS}/caldav
