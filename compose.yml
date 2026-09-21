@@ -282,6 +282,8 @@ services:
       - QUEUE_CONFIG=redpanda:9092
       - MAIL_URL=http://mail:8097
       - MAIL_AUTH_TOKEN=${MAIL_AUTH_TOKEN}
+      # Название продукта в письмах с приглашениями и кодами входа.
+      - BRANDING_PATH=/var/cfg/branding.json
       # Регистрация закрыта: инстанс рабочий, аккаунты заводятся приглашением.
       # Сервис читает переменную как DISABLE_SIGNUP !== "true", поэтому значение
       # должно быть строкой "true" — любое другое снова открывает регистрацию.
@@ -292,6 +294,8 @@ services:
       # в global_account.social_id. oleg@inples.ru оставлен на будущее — такого
       # аккаунта пока нет, а регистрация закрыта, завести можно приглашением.
       - ADMIN_EMAILS=9488488@gmail.com,oleg@inples.ru
+    volumes:
+      - ./branding/branding.json:/var/cfg/branding.json:ro
     command: ["bash", "-c", *wait-queue, "node", "bundle.js"]
     depends_on:
       redpanda:
@@ -315,6 +319,10 @@ services:
     # - INIT_REPO_DIR=/no-init-scripts
       - MAIL_URL=http://mail:8097
       - MAIL_AUTH_TOKEN=${MAIL_AUTH_TOKEN}
+      # Название продукта в письмах с приглашениями и кодами входа.
+      - BRANDING_PATH=/var/cfg/branding.json
+    volumes:
+      - ./branding/branding.json:/var/cfg/branding.json:ro
     command: ["bash", "-c", *wait-queue, "node", "bundle.js"]
     depends_on:
       redpanda:
@@ -369,6 +377,9 @@ services:
       # напрямую, без промежуточного HTTP-запроса.
       - PULSE_URL=ws${SECURE:+s}://${HOST_ADDRESS}/_pulse
       - LINK_PREVIEW_URL=http${SECURE:+s}://${HOST_ADDRESS}/_link-preview
+      # Брендинг: заголовок вкладки и favicon. Фронт ищет в файле ключ,
+      # равный хосту открытой страницы, поэтому адрес обязан быть абсолютным.
+      - BRANDING_URL=http${SECURE:+s}://${HOST_ADDRESS}/branding/branding.json
     restart: unless-stopped
     networks:
       - huly_net
@@ -411,6 +422,8 @@ services:
     depends_on:
       account:
         condition: service_started
+    volumes:
+      - ./branding:/app/dist/branding:ro
     restart: unless-stopped
     networks:
       - huly_net

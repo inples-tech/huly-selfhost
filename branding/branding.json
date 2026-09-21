@@ -1,0 +1,10 @@
+{
+  "erp.inples.ru": {
+    "title": "iNPLES",
+    "links": [
+      { "rel": "icon", "href": "/branding/icon-32.png", "type": "image/png", "sizes": "32x32" },
+      { "rel": "icon", "href": "/branding/icon-192.png", "type": "image/png", "sizes": "192x192" },
+      { "rel": "apple-touch-icon", "href": "/branding/icon-180.png", "type": "image/png", "sizes": "180x180" }
+    ]
+  }
+}
