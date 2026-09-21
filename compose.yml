@@ -376,6 +376,31 @@ services:
       # в global_account.social_id. oleg@inples.ru оставлен на будущее — такого
       # аккаунта пока нет, а регистрация закрыта, завести можно приглашением.
       - ADMIN_EMAILS=9488488@gmail.com,oleg@inples.ru
+      # Блокировка подбора пароля. Значение совпадает с умолчанием сервиса —
+      # выставлено явно, чтобы не зависеть от смены умолчания при обновлении.
+      # Счётчик обнуляется при верном пароле, но заблокированный аккаунт верный
+      # пароль уже не принимает: снимается только сбросом пароля.
+      - MAX_FAILED_LOGIN_ATTEMPTS=5
+      # Вход через Google, GitHub и корпоративный OIDC. Переменные намеренно
+      # не заданы: сервис включает провайдера по факту наличия пары id/secret,
+      # а пустая строка для него — тоже значение, и кнопка входа появится
+      # нерабочей. Раскомментировать вместе с заведением креды в панели.
+      # Адреса колбэков, которые нужно указать при создании приложений:
+      #   GitHub — https://erp.inples.ru/_accounts/auth/github/callback
+      #   Google — https://erp.inples.ru/_accounts/auth/google/callback
+      #   OIDC   — https://erp.inples.ru/_accounts/auth/openid/callback
+      # Регистрацию это не открывает: при DISABLE_SIGNUP=true провайдер пускает
+      # только тех, чей адрес уже заведён в аккаунтах, остальным отказ.
+      # - GITHUB_CLIENT_ID=${SSO_GITHUB_CLIENT_ID}
+      # - GITHUB_CLIENT_SECRET=${SSO_GITHUB_CLIENT_SECRET}
+      # - GITHUB_DISPLAY_NAME=GitHub
+      # - GOOGLE_CLIENT_ID=${SSO_GOOGLE_CLIENT_ID}
+      # - GOOGLE_CLIENT_SECRET=${SSO_GOOGLE_CLIENT_SECRET}
+      # - GOOGLE_DISPLAY_NAME=Google
+      # - OPENID_CLIENT_ID=${SSO_OPENID_CLIENT_ID}
+      # - OPENID_CLIENT_SECRET=${SSO_OPENID_CLIENT_SECRET}
+      # - OPENID_ISSUER=${SSO_OPENID_ISSUER}
+      # - OPENID_DISPLAY_NAME=SSO
     volumes:
       - ./branding/branding.json:/var/cfg/branding.json:ro
     command: ["bash", "-c", *wait-queue, "node", "bundle.js"]
