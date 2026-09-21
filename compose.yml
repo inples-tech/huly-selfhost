@@ -374,42 +374,59 @@ services:
     networks:
       - huly_net
 
-  # Запись экрана из интерфейса: браузер шлёт сюда куски видео, сервис их
-  # склеивает, перекодирует и кладёт в MinIO. Кнопка записи в правой панели
-  # появляется только при непустом STREAM_URL — без сервиса её нет вовсе.
+  # Запись экрана: сервис оставлен закомментированным.
   #
-  # Конфигурируется префиксом STREAM_, все ключи видны по `docker run` без
-  # переменных: без STREAM_SERVER_SECRET сервис падает с паникой на старте.
-  # Доступ к MinIO идёт через AWS SDK, поэтому ключи в стандартных AWS_*.
+  # Выгрузка из браузера до него доходит и завершается (tus: 201 на создание,
+  # 204 на докачку, UploadFinished в логе), но дальше конвейер молча встаёт:
+  # перекодирование не стартует, каталог /tmp/transcoing не создаётся, в очереди
+  # stream.transcode.request ноль сообщений, блоб в MinIO не появляется. Ошибок
+  # при этом нет ни одной.
   #
-  # Перекодирование упирается в процессор. На хосте шесть ядер и рядом живёт всё
-  # ядро Huly, поэтому параллельных задач одна и не больше двух потоков: запись
-  # экрана у нас редкая, а ронять транзактор ради неё незачем.
-  stream:
-    image: hardcoreeng/stream:${HULY_VERSION}
-    environment:
-      - STREAM_SERVER_SECRET=${SECRET}
-      - STREAM_SERVE_URL=0.0.0.0:1080
-      - STREAM_ENDPOINT_URL=s3://minio:9000
-      - AWS_ACCESS_KEY_ID=minioadmin
-      - AWS_SECRET_ACCESS_KEY=minioadmin
-      - AWS_REGION=us-east-1
-      - STREAM_QUEUE_CONFIG=redpanda:9092
-      - STREAM_MAX_PARALLEL_TRANSCODING_COUNT=1
-      - STREAM_MAX_THREAD_COUNT=2
-      - STREAM_LOG_LEVEL=info
-      - STREAM_PPROF_ENABLED=false
-      - STREAM_OTEL_ENABLED=false
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-    depends_on:
-      minio:
-        condition: service_started
-    restart: unless-stopped
-    networks:
-      - huly_net
+  # Причина в том, что сервис рассчитан на datalake, а не на прямой S3: в
+  # dev-compose самой Huly он настроен как datalake://huly.local:4030, а в
+  # бинаре тип DatalakeStorage встречается 98 раз. Поднимать datalake ради
+  # записи экрана — отдельный слой хранения блобов со своей метабазой, при том
+  # что платформа у нас читает блобы из MinIO напрямую.
+  #
+  # Чтобы вернуть: раскомментировать блок и STREAM_URL во фронте, а также
+  # location /recording в .huly.nginx.
+
+  # # Запись экрана из интерфейса: браузер шлёт сюда куски видео, сервис их
+  # # склеивает, перекодирует и кладёт в MinIO. Кнопка записи в правой панели
+  # # появляется только при непустом STREAM_URL — без сервиса её нет вовсе.
+  # #
+  # # Конфигурируется префиксом STREAM_, все ключи видны по `docker run` без
+  # # переменных: без STREAM_SERVER_SECRET сервис падает с паникой на старте.
+  # # Доступ к MinIO идёт через AWS SDK, поэтому ключи в стандартных AWS_*.
+  # #
+  # # Перекодирование упирается в процессор. На хосте шесть ядер и рядом живёт всё
+  # # ядро Huly, поэтому параллельных задач одна и не больше двух потоков: запись
+  # # экрана у нас редкая, а ронять транзактор ради неё незачем.
+  # stream:
+  #   image: hardcoreeng/stream:${HULY_VERSION}
+  #   environment:
+  #     - STREAM_SERVER_SECRET=${SECRET}
+  #     - STREAM_SERVE_URL=0.0.0.0:1080
+  #     - STREAM_ENDPOINT_URL=s3://minio:9000
+  #     - AWS_ACCESS_KEY_ID=minioadmin
+  #     - AWS_SECRET_ACCESS_KEY=minioadmin
+  #     - AWS_REGION=us-east-1
+  #     - STREAM_QUEUE_CONFIG=redpanda:9092
+  #     - STREAM_MAX_PARALLEL_TRANSCODING_COUNT=1
+  #     - STREAM_MAX_THREAD_COUNT=2
+  #     - STREAM_LOG_LEVEL=info
+  #     - STREAM_PPROF_ENABLED=false
+  #     - STREAM_OTEL_ENABLED=false
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 1G
+  #   depends_on:
+  #     minio:
+  #       condition: service_started
+  #   restart: unless-stopped
+  #   networks:
+  #     - huly_net
 
   # Разворачивание ссылок в чате, комментариях и документах: заголовок,
   # описание и картинка вместо голого URL. Ходит во внешний интернет сам.
@@ -647,8 +664,10 @@ services:
       - EXPORT_URL=http${SECURE:+s}://${HOST_ADDRESS}/_export
       - BACKUP_URL=http${SECURE:+s}://${HOST_ADDRESS}/_backup
       - ANALYTICS_COLLECTOR_URL=http${SECURE:+s}://${HOST_ADDRESS}/_analytics
-      # Без префикса: сервис отдаёт абсолютные адреса со своим путём /recording.
-      - STREAM_URL=http${SECURE:+s}://${HOST_ADDRESS}/recording
+      # Запись экрана отключена: кнопка появляется при непустом STREAM_URL, но
+      # довести файл до хранилища на нашей конфигурации нельзя — см. ниже
+      # у сервиса stream. Оставлять кнопку значит плодить пустые файлы в Drive.
+      # - STREAM_URL=http${SECURE:+s}://${HOST_ADDRESS}/recording
       # Адрес, который интерфейс показывает пользователю для настройки
       # календаря на телефоне и в почтовом клиенте.
       - CALDAV_SERVER_URL=http${SECURE:+s}://${HOST_ADDRESS}/caldav

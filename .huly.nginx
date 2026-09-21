@@ -229,6 +229,23 @@ server {
         proxy_pass http://$up_analytics:4007;
     }
 
+    # Запись экрана отключена вместе с сервисом stream — подробности в compose.yml.
+
+    # Приём событий интерфейса. Батчи бывают до 10 МБ — это предел самого
+    # сервиса, поэтому тело запроса тут не режем меньше.
+    location /_analytics {
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        client_max_body_size 10m;
+
+        set $up_analytics analytics-collector;
+        rewrite ^/_analytics(/.*)$ $1 break;
+        proxy_pass http://$up_analytics:4007;
+    }
+
     # Запись экрана. Путь именно /recording, без нашего префикса: сервис
     # работает по протоколу tus и на создание загрузки отвечает абсолютным
     # адресом следующего шага, построенным из своего пути —
