@@ -169,6 +169,30 @@ server {
         proxy_pass http://$up_pulse:8099;
     }
 
+    # CalDAV. Сервис отдаёт свои маршруты от корня (/caldav, /.well-known/caldav),
+    # поэтому префикс не переписываем: клиенты ходят по абсолютным ссылкам,
+    # которые сервер сам же и выдаёт в ответах PROPFIND.
+    location /caldav {
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        set $up_caldav huly-caldav;
+        proxy_pass http://$up_caldav:4000;
+    }
+
+    # Автообнаружение: календарные клиенты сначала спрашивают этот адрес.
+    location /.well-known/caldav {
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        set $up_caldav_wk huly-caldav;
+        proxy_pass http://$up_caldav_wk:4000;
+    }
+
     # Разворачивание ссылок в чате и документах.
     location /_link-preview {
         proxy_set_header Host $host;

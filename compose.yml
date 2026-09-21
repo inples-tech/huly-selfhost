@@ -177,6 +177,82 @@ services:
     networks:
       - huly_net
 
+  # Автоматизация Process: правила вида «задача перешла в статус X → назначить,
+  # уведомить, создать дочернюю». Сервис слушает топик process в redpanda.
+  #
+  # TEMPORAL_ADDRESS и TEMPORAL_NAMESPACE в конфиге есть, но клиента Temporal
+  # в бандле нет и без них сервис поднимается и входит в группу потребителей —
+  # проверено на живом контейнере. Понадобятся, если всплывут шаги с ожиданием.
+  process:
+    image: hardcoreeng/process:${HULY_VERSION}
+    environment:
+      - SECRET=${SECRET}
+      - ACCOUNTS_URL=http://account:3000
+      - STATS_URL=http://stats:4900
+      - QUEUE_CONFIG=redpanda:9092
+      - QUEUE_REGION=
+      - COLLABORATOR_URL=ws://collaborator:3078
+    command: ["bash", "-c", *wait-queue, "node", "bundle.js"]
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - huly_net
+
+  # CalDAV: календарь Huly в Apple Calendar, Thunderbird и телефоне.
+  # Внутри rustical со своим хранилищем поверх Huly — Google не нужен.
+  # Кэш синхронизации кладём в наш kvs, чтобы не заводить сервису том.
+  #
+  # Маршруты живут на /caldav от корня, поэтому nginx проксирует префикс как
+  # есть, без rewrite. CardDAV (контакты) в этой сборке нет — /carddav отдаёт 404.
+  # Доступ включает сам пользователь: в интерфейсе появляется пункт CalDAV Access,
+  # который заводит интеграцию kind=caldav с отдельным паролем приложения.
+  huly-caldav:
+    image: hardcoreeng/huly-caldav:${HULY_VERSION}
+    environment:
+      - HTTP_HOST=0.0.0.0
+      - HTTP_PORT=4000
+      - LOG_LEVEL=info
+      - ACCOUNTS_URL=http://account:3000
+      - SERVER_SECRET=${SECRET}
+      - KV_URL=http://kvs:8094
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - huly_net
+
+  # Публичная страница записи на встречу — аналог Calendly внутри Huly.
+  # Маршруты: /{workspace}/{schedule} и /api/{timeslots,book,cancel,reschedule}.
+  #
+  # SMTP_URL здесь — не почтовый сервер, а наш сервис mail: письма уходят
+  # через POST {SMTP_URL}/send с тем же MAIL_AUTH_TOKEN.
+  #
+  # Живёт на своём поддомене: ассеты Astro запрошены по абсолютному /_astro,
+  # под префиксом страница осталась бы без стилей.
+  huly-schedule:
+    image: hardcoreeng/huly-schedule:${HULY_VERSION}
+    environment:
+      - PORT=8060
+      - HOST=0.0.0.0
+      - LOG_LEVEL=info
+      - ACCOUNT_URL=http://account:3000
+      - FRONT_URL=http${SECURE:+s}://${HOST_ADDRESS}
+      - SECRET=${SECRET}
+      - SMTP_URL=http://mail:8097
+      - SMTP_API_KEY=${MAIL_AUTH_TOKEN}
+      - LAST_NAME_FIRST=${LAST_NAME_FIRST:-true}
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - huly_net
+
   # Разворачивание ссылок в чате, комментариях и документах: заголовок,
   # описание и картинка вместо голого URL. Ходит во внешний интернет сам.
   link-preview:
@@ -377,6 +453,11 @@ services:
       # напрямую, без промежуточного HTTP-запроса.
       - PULSE_URL=ws${SECURE:+s}://${HOST_ADDRESS}/_pulse
       - LINK_PREVIEW_URL=http${SECURE:+s}://${HOST_ADDRESS}/_link-preview
+      # Адрес, который интерфейс показывает пользователю для настройки
+      # календаря на телефоне и в почтовом клиенте.
+      - CALDAV_SERVER_URL=http${SECURE:+s}://${HOST_ADDRESS}/caldav
+      # Поддомен, а не префикс: см. комментарий у huly-schedule.
+      - PUBLIC_SCHEDULE_URL=https://${SCHEDULE_HOST:-schedule.inples.ru}
       # Брендинг: заголовок вкладки и favicon. Фронт ищет в файле ключ,
       # равный хосту открытой страницы, поэтому адрес обязан быть абсолютным.
       - BRANDING_URL=http${SECURE:+s}://${HOST_ADDRESS}/branding/branding.json
