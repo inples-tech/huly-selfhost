@@ -25,3 +25,15 @@ RUN set -eu; \
     test -n "$target"; \
     sed -i 's/account\.socialIds\[0\]/(account.socialIds[0] ?? account.primarySocialId)/g' $target; \
     grep -q 'account.primarySocialId)' $target
+
+# Вторая заплатка: письма о брони уходили с 401 «Unauthorized».
+# Сервис шлёт письма через наш mail (POST /send), а тот требует apiKey в теле
+# запроса — и именно эта строка в образе закомментирована самим вендором:
+#   //apiKey: process.env.SMTP_API_KEY,
+# Переменная SMTP_API_KEY при этом читается и документирована. Раскомментируем;
+# значение должно совпадать с API_KEY сервиса mail (у нас это MAIL_AUTH_TOKEN).
+RUN set -eu; \
+    target=$(grep -rl '//apiKey: process.env.SMTP_API_KEY' /app/dist/server/chunks); \
+    test -n "$target"; \
+    sed -i 's|//apiKey: process.env.SMTP_API_KEY|apiKey: process.env.SMTP_API_KEY|' $target; \
+    grep -q '^\s*apiKey: process.env.SMTP_API_KEY' $target
