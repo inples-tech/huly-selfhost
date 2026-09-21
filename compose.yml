@@ -439,7 +439,14 @@ services:
       - huly_net
 
   front:
-    image: hardcoreeng/front:${HULY_VERSION}
+    # Свой образ: брендинг вложен внутрь, а не примонтирован снаружи.
+    # Почему так — в docker/front/Dockerfile.
+    build:
+      context: .
+      dockerfile: docker/front/Dockerfile
+      args:
+        HULY_VERSION: ${HULY_VERSION}
+    image: huly-front-branded:${HULY_VERSION}
     environment:
       - SERVER_PORT=8080
       - SERVER_SECRET=${SECRET}
@@ -492,8 +499,6 @@ services:
       # Брендинг: заголовок вкладки и favicon. Фронт ищет в файле ключ,
       # равный хосту открытой страницы, поэтому адрес обязан быть абсолютным.
       - BRANDING_URL=http${SECURE:+s}://${HOST_ADDRESS}/branding/branding.json
-    volumes:
-      - ./branding:/app/dist/branding:ro
     restart: unless-stopped
     networks:
       - huly_net
