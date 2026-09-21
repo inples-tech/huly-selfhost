@@ -131,35 +131,68 @@ services:
       - huly_net
     # Required by aibot and calendar services, plus the telegram account integration
 
-  # redis:
-  #   image: redis:7-alpine
-  #   command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
-  #   restart: unless-stopped
-  #   networks:
-  #     - huly_net
-  #   # Required by HulyPulse (push notifications / real-time updates)
+  # Присутствие и живые обновления: кто сейчас смотрит документ, курсоры
+  # соавторов, статусы «онлайн». Фронт соединяется по PULSE_URL напрямую
+  # вебсокетом (`${PULSE_URL}?token=...`), поэтому nginx переписывает
+  # /_pulse в /ws — сервис слушает вебсокеты именно там, а /status и /api
+  # остаются для диагностики изнутри сети.
+  #
+  # Конфиг читается либо из etc/config.toml, либо из переменных с префиксом
+  # HULY_ — второе удобнее: секрет приходит из панели, а не из файла в git.
+  # Backend memory: присутствие эфемерно, переживать рестарт ему незачем,
+  # redis понадобится только при нескольких экземплярах сервиса.
+  hulypulse:
+    image: hardcoreeng/hulypulse:${HULY_VERSION}
+    environment:
+      - HULY_BIND_PORT=8099
+      - HULY_LOG=info
+      - HULY_TOKEN_SECRET=${SECRET}
+      - HULY_BACKEND=memory
+      - HULY_HEARTBEAT_TIMEOUT=60
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - huly_net
 
-  # hulypulse:
-  #   image: hardcoreeng/service_hulypulse:${HULY_PULSE_VERSION:-0.1.29}
-  #   ports:
-  #     - 8099:8099
-  #   environment:
-  #     - HULY_BIND_PORT=8099
-  #     - HULY_LOG=info
-  #     - HULY_TOKEN_SECRET=${SECRET}
-  #     - HULY_HEARTBEAT_TIMEOUT=60
-  #     - HULY_BACKEND=memory
-  #     # For Redis backend instead of in-memory (optional, e.g. multi-node setups):
-  #     # - HULY_BACKEND=redis
-  #     # - HULY_REDIS_MODE=direct
-  #     # - HULY_REDIS_URLS=redis://redis:6379
-  #   deploy:
-  #     resources:
-  #       limits:
-  #         memory: 512M
-  #   restart: unless-stopped
-  #   networks:
-  #     - huly_net
+  # Пуш-уведомления в браузер и на телефон. Транзактор шлёт сюда POST /web-push
+  # с подписками и телом уведомления, сервис подписывает их VAPID-ключами.
+  # Авторизация — тот же MAIL_AUTH_TOKEN: транзактор переиспользует его как
+  # Bearer для этого вызова (mailAuth в sendPushToSubscription).
+  # Без пары ключей сервис поднимется, но будет молча возвращать пустой
+  # результат — в логе это одна строка "VAPID keys not configured".
+  notification:
+    image: hardcoreeng/notification:${HULY_VERSION}
+    environment:
+      - PORT=8091
+      - SOURCE=${HOST_ADDRESS}
+      - AUTH_TOKEN=${MAIL_AUTH_TOKEN}
+      - PUSH_PUBLIC_KEY=${PUSH_PUBLIC_KEY}
+      - PUSH_PRIVATE_KEY=${PUSH_PRIVATE_KEY}
+      - PUSH_SUBJECT=mailto:huly@inples.ru
+      - STATS_URL=http://stats:4900
+    restart: unless-stopped
+    networks:
+      - huly_net
+
+  # Разворачивание ссылок в чате, комментариях и документах: заголовок,
+  # описание и картинка вместо голого URL. Ходит во внешний интернет сам.
+  link-preview:
+    image: hardcoreeng/link-preview:${HULY_VERSION}
+    environment:
+      - PORT=4041
+      - SECRET=${SECRET}
+      - SERVICE_ID=link-preview-service
+      - STATS_URL=http://stats:4900
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - huly_net
 
   rekoni:
     image: hardcoreeng/rekoni-service:${HULY_VERSION}
@@ -186,6 +219,8 @@ services:
       - STATS_URL=http://stats:4900
       - LAST_NAME_FIRST=${LAST_NAME_FIRST:-true}
       - QUEUE_CONFIG=redpanda:9092
+      # Пуши уходят через notification; без переменной транзактор их просто не шлёт.
+      - WEB_PUSH_URL=http://notification:8091
       - MAIL_URL=http://mail:8097
       - MAIL_AUTH_TOKEN=${MAIL_AUTH_TOKEN}
     command: ["bash", "-c", *wait-queue, "node", "./bundle.js"]
@@ -327,6 +362,13 @@ services:
       - DISABLED_FEATURES=auto-translate,mailboxes
       # Фронт прячет форму регистрации; сама проверка живёт в account.
       - DISABLE_SIGNUP=true
+      # Публичный VAPID-ключ: по нему браузер оформляет подписку на пуши.
+      # Приватный знает только notification.
+      - PUSH_PUBLIC_KEY=${PUSH_PUBLIC_KEY}
+      # Присутствие. Схема ws: клиент открывает соединение по этому адресу
+      # напрямую, без промежуточного HTTP-запроса.
+      - PULSE_URL=ws${SECURE:+s}://${HOST_ADDRESS}/_pulse
+      - LINK_PREVIEW_URL=http${SECURE:+s}://${HOST_ADDRESS}/_link-preview
     restart: unless-stopped
     networks:
       - huly_net

@@ -145,18 +145,41 @@ server {
         proxy_pass http://$up_stats:4900;
     }
 
-    #location /_pulse {
-    #    proxy_set_header Host $host;
-    #    proxy_set_header X-Real-IP $remote_addr;
-    #    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    #    proxy_set_header X-Forwarded-Proto $scheme;
-    #
-    #    proxy_http_version 1.1;
-    #    proxy_set_header Upgrade $http_upgrade;
-    #    proxy_set_header Connection "upgrade";
-    #    rewrite ^/_pulse(.*)$ /ws$1 break;
-    #    proxy_pass http://hulypulse:8099/;
-    #}
+    # Присутствие. Фронт открывает вебсокет прямо по этому адресу
+    # (PULSE_URL + "?token=..."), без предварительного HTTP-запроса, поэтому
+    # префикс переписывается в /ws — именно там сервис принимает соединения.
+    # /api и /status наружу не отдаём: они нужны только изнутри сети.
+    location /_pulse {
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        # Соединение живёт долго и молчит между событиями — таймаут по умолчанию
+        # (60 секунд) рвал бы его на каждой паузе.
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+
+        set $up_pulse hulypulse;
+        rewrite ^/_pulse(.*)$ /ws$1 break;
+        proxy_pass http://$up_pulse:8099;
+    }
+
+    # Разворачивание ссылок в чате и документах.
+    location /_link-preview {
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        set $up_link_preview link-preview;
+        rewrite ^/_link-preview(/.*)$ $1 break;
+        proxy_pass http://$up_link_preview:4041;
+    }
 
     # Бот-уведомления. Префикс длиннее, чем у /_telegram, поэтому nginx выбирает
     # именно его для этих запросов независимо от порядка блоков.
