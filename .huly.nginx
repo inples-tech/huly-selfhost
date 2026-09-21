@@ -229,6 +229,27 @@ server {
         proxy_pass http://$up_analytics:4007;
     }
 
+    # Запись экрана: браузер льёт сюда куски видео, обратно приходит готовый файл.
+    # Куски крупные и идут долго, поэтому лимит тела снят, таймауты подняты,
+    # а буферизация выключена — иначе nginx копил бы запись на диске целиком.
+    location /_stream {
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        client_max_body_size 0;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+
+        set $up_stream stream;
+        rewrite ^/_stream(/.*)$ $1 break;
+        proxy_pass http://$up_stream:1080;
+    }
+
     # Разворачивание ссылок в чате и документах.
     location /_link-preview {
         proxy_set_header Host $host;
