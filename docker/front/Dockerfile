@@ -25,6 +25,12 @@ RUN test -s /app/dist/branding/branding.json && test -s /app/dist/branding/icon-
 # Почему именно так — в комментарии внутри branding/brand.css.
 # Проверка обязательна: если разметка index.html изменится и вставка не
 # сработает, сборка должна упасть, а не выкатить фронт без брендинга.
+# Рядом с index.html в образе лежит index.html.gz, и статика отдаёт именно его
+# всем, кто принимает gzip, то есть любому браузеру. Правка только исходного
+# файла выглядит применившейся (curl без сжатия видит её), а в интерфейсе
+# ничего не меняется — поэтому пересобираем и сжатую копию.
 RUN set -eu; \
     sed -i 's|</head>|<link rel="stylesheet" href="/branding/brand.css"></head>|' /app/dist/index.html; \
-    grep -q 'branding/brand.css' /app/dist/index.html
+    grep -q 'branding/brand.css' /app/dist/index.html; \
+    gzip -9 -c /app/dist/index.html > /app/dist/index.html.gz; \
+    gzip -dc /app/dist/index.html.gz | grep -q 'branding/brand.css'
