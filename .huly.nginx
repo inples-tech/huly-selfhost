@@ -231,47 +231,6 @@ server {
 
     # Запись экрана отключена вместе с сервисом stream — подробности в compose.yml.
 
-    # Приём событий интерфейса. Батчи бывают до 10 МБ — это предел самого
-    # сервиса, поэтому тело запроса тут не режем меньше.
-    location /_analytics {
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        client_max_body_size 10m;
-
-        set $up_analytics analytics-collector;
-        rewrite ^/_analytics(/.*)$ $1 break;
-        proxy_pass http://$up_analytics:4007;
-    }
-
-    # Запись экрана. Путь именно /recording, без нашего префикса: сервис
-    # работает по протоколу tus и на создание загрузки отвечает абсолютным
-    # адресом следующего шага, построенным из своего пути —
-    # «Location: https://erp.inples.ru/recording/<id>». Под префиксом
-    # /_stream браузер после первого запроса уходил бы по адресу, которого
-    # у нас нет, и запись не завершалась бы.
-    #
-    # Куски крупные и идут долго, поэтому лимит тела снят, буферизация в обе
-    # стороны выключена, таймауты подняты.
-    location /recording {
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        proxy_http_version 1.1;
-        client_max_body_size 0;
-        proxy_request_buffering off;
-        proxy_buffering off;
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-
-        set $up_stream stream;
-        proxy_pass http://$up_stream:1080;
-    }
-
     # Разворачивание ссылок в чате и документах.
     location /_link-preview {
         proxy_set_header Host $host;
