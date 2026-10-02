@@ -881,22 +881,42 @@ services:
   #
   # Сигнальный WebSocket приходит на livekit.inples.ru через traefik, медиа идёт
   # напрямую на хост: UDP 7882 (мультиплекс) и TCP 7881 (fallback для клиентов
-  # за жёстким NAT). Диапазон UDP-портов сознательно не публикуем.
+  # за жёстким NAT), а если и они закрыты — через TURN (UDP 3478 или TLS на 443
+  # по SNI turn.inples.ru). Диапазон UDP-портов сознательно не публикуем.
   livekit:
     image: livekit/livekit-server:v1.8.4
     command: --config /etc/livekit.yaml
     volumes:
       - ./.livekit.yaml:/etc/livekit.yaml:ro
     environment:
-      # Формат "имя_ключа: секрет"; имя обязано совпадать с webhook.api_key
-      # в .livekit.yaml.
-      # Кавычки обязательны: без них ": " делает из строки словарь и
-      # docker compose падает на "unexpected type map".
-      - "LIVEKIT_KEYS=${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+      # Пары "имя_ключа: секрет" одной строкой в YAML flow-стиле: панель
+      # Dokploy портит многострочные значения. Ключ Huly обязан совпадать с
+      # webhook.api_key в .livekit.yaml. Вторая пара принадлежит ГранаЙ
+      # (GRA-742): её комнаты идут с префиксом gra_, вебхуки ей не нужны.
+      # Обе пары должны быть заданы в env Dokploy до деплоя: пустое имя
+      # ключа livekit-server не примет.
+      # Ключи не изолируют комнаты: любой ключ сервера видит и открывает
+      # любую комнату по имени. Для пилота принято, оба ключа у нас.
+      - 'LIVEKIT_KEYS={"${LIVEKIT_API_KEY}": "${LIVEKIT_API_SECRET}", "${GRANAY_LIVEKIT_API_KEY}": "${GRANAY_LIVEKIT_API_SECRET}"}'
+    # 7880 (сигналинг без TLS) наружу не публикуем: клиенты приходят через
+    # traefik на wss://livekit.inples.ru, сервисы — по сети docker.
     ports:
-      - "7880:7880"
       - "7881:7881"
       - "7882:7882/udp"
+      # TURN/UDP. TURN/TLS идёт через traefik на 443 (метки ниже).
+      - "3478:3478/udp"
+    # TURN/TLS для клиентов, у которых наружу открыт только 443 (корпоративные
+    # сети). Traefik терминирует TLS по SNI turn.inples.ru и отдаёт открытый
+    # TCP в livekit:5349 (turn.external_tls в .livekit.yaml). Сертификат
+    # выпускает тот же резолвер letsencrypt по HTTP-01, поэтому A-запись
+    # turn.inples.ru должна смотреть на хост до деплоя.
+    labels:
+      - "traefik.tcp.routers.livekit-turn.rule=HostSNI(`turn.inples.ru`)"
+      - "traefik.tcp.routers.livekit-turn.entrypoints=websecure"
+      - "traefik.tcp.routers.livekit-turn.tls=true"
+      - "traefik.tcp.routers.livekit-turn.tls.certresolver=letsencrypt"
+      - "traefik.tcp.routers.livekit-turn.service=livekit-turn"
+      - "traefik.tcp.services.livekit-turn.loadbalancer.server.port=5349"
     restart: unless-stopped
     networks:
       - huly_net

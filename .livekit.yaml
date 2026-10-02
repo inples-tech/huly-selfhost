@@ -39,6 +39,14 @@ webhook:
     - http://meetscribe:4030/webhook
 
 turn:
-  # Встроенный TURN выключен: 443 занят traefik'ом, а для клиентов за жёстким
-  # NAT хватает ICE-TCP на 7881.
-  enabled: false
+  # Встроенный TURN для клиентов за корпоративным файрволом, где открыт только
+  # 443 (GRA-742). Порт 443 занят traefik'ом, поэтому TLS терминирует он по SNI
+  # turn.inples.ru и шлёт открытый TCP на tls_port; external_tls говорит
+  # LiveKit не поднимать TLS самому и объявлять клиентам turns:...:443.
+  # Диапазон relay_range наружу не публикуется: встроенный TURN ретранслирует
+  # в SFU этого же процесса.
+  enabled: true
+  domain: turn.inples.ru
+  tls_port: 5349
+  udp_port: 3478
+  external_tls: true
