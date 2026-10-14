@@ -884,7 +884,11 @@ services:
   # за жёстким NAT), а если и они закрыты — через TURN (UDP 3478 или TLS на 443
   # по SNI turn.inples.ru). Диапазон UDP-портов сознательно не публикуем.
   livekit:
-    image: livekit/livekit-server:v1.8.4
+    # 1.9.12 (GRA-1192): исправления оценки канала по потерям (1.9.1, 1.9.6).
+    # Совместимость проверена 14.10.2026 на стенде с этим конфигом: API ядра
+    # ГранаЙ (livekit-api 1.2.1), медиа (lk load-test 2+2 публикатора, 4
+    # подписчика, 0% потерь), egress v1.9.1 той же ветки.
+    image: livekit/livekit-server:v1.9.12
     command: --config /etc/livekit.yaml
     volumes:
       - ./.livekit.yaml:/etc/livekit.yaml:ro
@@ -917,6 +921,16 @@ services:
       - "traefik.tcp.routers.livekit-turn.tls.certresolver=letsencrypt"
       - "traefik.tcp.routers.livekit-turn.service=livekit-turn"
       - "traefik.tcp.services.livekit-turn.loadbalancer.server.port=5349"
+      # Метрики Prometheus (GRA-1192): https://livekit.inples.ru/metrics, только
+      # стеку мониторинга ГранаЙ (65.21.4.74). Путь длиннее правила домена,
+      # поэтому роутер приоритетнее сигналинга на 7880.
+      - "traefik.http.routers.livekit-metrics.rule=Host(`livekit.inples.ru`) && Path(`/metrics`)"
+      - "traefik.http.routers.livekit-metrics.entrypoints=websecure"
+      - "traefik.http.routers.livekit-metrics.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.livekit-metrics.middlewares=livekit-metrics-allow"
+      - "traefik.http.routers.livekit-metrics.service=livekit-metrics"
+      - "traefik.http.services.livekit-metrics.loadbalancer.server.port=6789"
+      - "traefik.http.middlewares.livekit-metrics-allow.ipallowlist.sourcerange=65.21.4.74/32"
     restart: unless-stopped
     networks:
       - huly_net
