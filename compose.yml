@@ -497,10 +497,16 @@ services:
   # Исходящие письма: приглашения в workspace, сброс пароля, уведомления.
   # Шлюз на nodemailer, наружу не торчит — account и transactor ходят в него
   # по huly_net. API_KEY здесь и MAIL_AUTH_TOKEN у клиентов должны совпадать:
-  # ключ уезжает в теле запроса полем apiKey, несовпадение даёт 401.
+  # транзактор кладёт ключ в тело полем apiKey, account — в заголовок
+  # Authorization: Bearer. Штатный образ понимает только тело, поэтому свой
+  # образ с заплаткой — подробности в docker/mail/Dockerfile.
   # PORT обязателен, дефолта у сервиса нет — без него контейнер падает на старте.
   mail:
-    image: hardcoreeng/mail:${HULY_VERSION}
+    build:
+      context: ./docker/mail
+      args:
+        HULY_VERSION: ${HULY_VERSION}
+    image: huly-mail-patched:${HULY_VERSION}
     environment:
       - PORT=8097
       - SOURCE=${SMTP_SOURCE}
