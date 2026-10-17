@@ -1,3 +1,16 @@
+# Политика CSP для файлов из /files. Фронт отдаёт любой файл с
+# `default-src 'none'`: для HTML-отчёта это значит «без стилей», страница
+# открывается голым текстом. Для text/html ставим песочницу: документ получает
+# непрозрачный origin и не видит ни куки, ни localStorage Huly, а сеть закрыта
+# (connect-src и img-src наружу не разрешены), поэтому скрипт отчёта ничего
+# не утащит. Внутри разрешены только встроенные стили, скрипты, картинки и
+# шрифты из data: — ровно то, из чего собраны наши self-contained отчёты.
+# Остальные типы получают тот заголовок, который прислал фронт.
+map $upstream_http_content_type $files_csp {
+    ~*^text/html  "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:";
+    default       $upstream_http_content_security_policy;
+}
+
 server {
     listen 80;
     server_name _;
@@ -14,6 +27,22 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+
+        set $up_front front;
+        proxy_pass http://$up_front:8080;
+    }
+
+    # Файлы и вложения: тот же фронт, но CSP подменяется по типу файла
+    # (см. map $files_csp вверху). Нужно для просмотра HTML-отчётов в Huly:
+    # превьюер встраивает файл iframe'ом, и без стилей отчёт нечитаем.
+    location /files {
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_hide_header Content-Security-Policy;
+        add_header Content-Security-Policy $files_csp always;
 
         set $up_front front;
         proxy_pass http://$up_front:8080;
