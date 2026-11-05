@@ -895,10 +895,26 @@ services:
     # ГранаЙ (livekit-api 1.2.1), медиа (lk load-test 2+2 публикатора, 4
     # подписчика, 0% потерь), egress v1.9.1 той же ветки.
     image: livekit/livekit-server:v1.9.12
-    command: --config /etc/livekit.yaml
+    # Конфиг собирается при старте: секрет запасного TURN (turn2, GRA-1575) в git
+    # не лежит, его подставляет sed из TURN2_SECRET (секреты Dokploy). Без
+    # переменной блок между метками turn2-begin/turn2-end вырезается, и LiveKit
+    # работает как раньше, только со встроенным TURN.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -n "$${TURN2_SECRET:-}" ]; then
+          sed "s|__TURN2_SECRET__|$${TURN2_SECRET}|g" /etc/livekit.yaml > /tmp/livekit.yaml
+        else
+          sed "/# turn2-begin/,/# turn2-end/d" /etc/livekit.yaml > /tmp/livekit.yaml
+        fi
+        exec /livekit-server --config /tmp/livekit.yaml
     volumes:
       - ./.livekit.yaml:/etc/livekit.yaml:ro
     environment:
+      # Общий секрет coturn на rullmapi (turn2.inples.ru). Живёт в
+      # /etc/dokploy/secrets/<app>.env, не в env Dokploy.
+      - TURN2_SECRET=${TURN2_SECRET:-}
       # Пары "имя_ключа: секрет" одной строкой в YAML flow-стиле: панель
       # Dokploy портит многострочные значения. Ключ Huly обязан совпадать с
       # webhook.api_key в .livekit.yaml. Вторая пара принадлежит ГранаЙ
